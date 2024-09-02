@@ -1,9 +1,11 @@
-import streamlit as st 
+import streamlit as st
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import PyPDFLoader
 from transformers import T5Tokenizer, T5ForConditionalGeneration, pipeline
 import torch
 import base64
+import tempfile
+import os
 
 # Model and tokenizer loading
 checkpoint = "LaMini-Flan-T5-248M"
@@ -12,18 +14,24 @@ base_model = T5ForConditionalGeneration.from_pretrained(checkpoint, device_map='
 
 # File loader and preprocessing
 def file_preprocessing(uploaded_file):
-    with open("temp.pdf", "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    loader = PyPDFLoader("temp.pdf")
+    # Use a temporary file to handle the PDF
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+        temp_file.write(uploaded_file.getbuffer())
+        temp_file_path = temp_file.name
+
+    loader = PyPDFLoader(temp_file_path)
     pages = loader.load_and_split()
-    
+
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=50)
     texts = text_splitter.split_documents(pages)
-    
+
     final_texts = ""
     for text in texts:
         final_texts += text.page_content
+
+    # Clean up temporary file
+    os.remove(temp_file_path)
+    
     return final_texts
 
 # LLM pipeline
@@ -32,13 +40,21 @@ def llm_pipeline(uploaded_file):
         'summarization',
         model=base_model,
         tokenizer=tokenizer,
-        max_length=500, 
+        max_length=500,
         min_length=50
     )
     input_text = file_preprocessing(uploaded_file)
-    result = pipe_sum(input_text)
-    summary = result[0]['summary_text']
-    return summary
+    # Chunk the text for summarization to handle large texts
+    chunks = [input_text[i:i + 1024] for i in range(0, len(input_text), 1024)]
+    summaries = []
+    
+    for chunk in chunks:
+        result = pipe_sum(chunk)
+        summaries.append(result[0]['summary_text'])
+    
+    # Combine summaries into a final summary
+    final_summary = " ".join(summaries)
+    return final_summary
 
 @st.cache_data
 # Function to display the PDF of a given file 
